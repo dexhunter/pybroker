@@ -1,0 +1,40 @@
+{
+  "targets": [
+    {
+      "upstream_repo": "edtechre/pybroker",
+      "head_sha": "01f11fdd42b76ef564a7f550c247a3dfce81330e",
+      "file": "src/pybroker/common.py",
+      "function": "quantize",
+      "native_test_cmd": "python -m pytest tests/test_common.py -k quantize -p no:randomly",
+      "bench_cmd": "python osspr-intake/harness/quantize/bench.py",
+      "baseline_median_ms": 4.8836,
+      "baseline_noise_pct": 1.39,
+      "tests_pass_on_baseline": true,
+      "notes": "Result-export path. On a 20,000-value Decimal column the body is a Python list comprehension around Decimal.quantize, and DataFrame.dropna pays an object-dtype NA scan (pandas _isna_string_dtype) even when nothing is missing. cProfile puts about half the time in that Python/pandas wrapper rather than in the rounding rule. Cent rounding must stay ROUND_HALF_UP."
+    },
+    {
+      "upstream_repo": "edtechre/pybroker",
+      "head_sha": "01f11fdd42b76ef564a7f550c247a3dfce81330e",
+      "file": "src/pybroker/scope.py",
+      "function": "symbol_array_store_from_flat_frame",
+      "native_test_cmd": "python -m pytest tests/test_scope.py -k \"symbol_array_store_from_frame or symbol_array_store_pickle\" -p no:randomly",
+      "bench_cmd": "python osspr-intake/harness/store_from_flat_frame/bench.py",
+      "baseline_median_ms": 15.1638,
+      "baseline_noise_pct": 2.14,
+      "tests_pass_on_baseline": true,
+      "notes": "Flat OHLCV ingress used by every backtest store build. On 50 symbols x 1,260 days, cProfile shows about 70% of the time in np.unique(return_inverse=True) argsorting the repeated symbol strings (50 labels, 63k rows). A hash factorize, or run-length grouping when the frame is already symbol-major, avoids that string sort. Float columns are also materialized twice: to_numpy(copy=True) into an array that is then discarded, then copied again into the column stack."
+    },
+    {
+      "upstream_repo": "edtechre/pybroker",
+      "head_sha": "01f11fdd42b76ef564a7f550c247a3dfce81330e",
+      "file": "src/pybroker/scope.py",
+      "function": "slice_symbol_array_store_by_dates",
+      "native_test_cmd": "python -m pytest tests/test_scope.py -k slice_symbol_array_store_by_dates -p no:randomly",
+      "bench_cmd": "python osspr-intake/harness/slice_symbol_store/bench.py",
+      "baseline_median_ms": 12.222,
+      "baseline_noise_pct": 2.52,
+      "tests_pass_on_baseline": true,
+      "notes": "Walkforward history/train/test slicing. Each call re-checks that the target window and every symbol's dates are sorted (np.all over the full date array) and then copies every column with np.array(..., copy=True), including the contiguous-range branch. The store builder already sorts dates, and a history window is a contiguous span, so those scans and per-column copies repeat. The bench times five slices of one 120-symbol x 2,000-date window because a single slice is only ~2.5ms and its run-to-run spread exceeds 3%."
+    }
+  ]
+}
