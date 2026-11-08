@@ -734,30 +734,46 @@ def symbol_array_store_from_flat_frame(
         return SymbolArrayStore(frozenset(), {})
     sym_values = df[sym_col].astype(str).to_numpy()
     date_arr = df[date_col].to_numpy(dtype="datetime64[ns]", copy=False)
-    unique_syms, sym_ids = np.unique(sym_values, return_inverse=True)
-    order = np.lexsort((date_arr, sym_ids.astype(np.int64)))
-    sorted_sym_ids = sym_ids[order].astype(np.int64)
+    # Hash-factorize symbols and dates (sorted codes, as np.unique would
+    # give), then order rows with one stable argsort of a combined key, which
+    # matches the (symbol, date) lex-sort. The key is cast to the narrowest
+    # unsigned dtype that holds it, so numpy can radix-sort small keys.
+    sym_ids, unique_syms = pd.factorize(sym_values, sort=True)
+    date_ids, unique_dates = pd.factorize(
+        date_arr, sort=True, use_na_sentinel=False
+    )
+    n_keys = len(unique_syms) * len(unique_dates)
+    key = sym_ids * len(unique_dates) + date_ids
+    order = np.argsort(
+        key.astype(np.min_scalar_type(n_keys - 1)), kind="stable"
+    )
+    sorted_sym_ids = sym_ids[order]
     starts, ends = _find_bin_starts_ends(sorted_sym_ids)
     data_cols = [col for col in df.columns if col != sym_col]
     float_cols: list[str] = []
+    float_values: list[NDArray] = []
     other_arrays: dict[str, NDArray] = {}
     for col in data_cols:
         if col == date_col:
             continue
-        col_arr = np.asarray(df[col].to_numpy(copy=True)[order])
-        if np.issubdtype(col_arr.dtype, np.number):
+        values = df[col].to_numpy()
+        if np.issubdtype(values.dtype, np.number):
             float_cols.append(col)
+            float_values.append(values)
         else:
-            other_arrays[col] = col_arr
-    n_rows = len(order)
+            other_arrays[col] = values[order]
     sorted_dates = np.ascontiguousarray(
         date_arr[order], dtype="datetime64[ns]"
     )
-    col_stack = np.empty((len(float_cols), n_rows), dtype=np.float64)
-    for c, col in enumerate(float_cols):
-        col_stack[c] = np.ascontiguousarray(
-            df[col].to_numpy(copy=True)[order], dtype=np.float64
-        )
+    # Read each column once, then reorder all numeric columns into the float64
+    # stack with one batched gather.
+    col_stack = np.take(
+        np.array(float_values, dtype=np.float64).reshape(
+            len(float_cols), len(order)
+        ),
+        order,
+        axis=1,
+    )
     # Rows are lex-sorted by (symbol, date), so each symbol owns a contiguous
     # range. Keep the whole-frame buffers and describe symbols as ranges into
     # them, rather than copying each symbol out: the buffers stay large enough
