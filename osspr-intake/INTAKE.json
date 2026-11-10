@@ -1,0 +1,56 @@
+[
+  {
+    "upstream_repo": "edtechre/pybroker",
+    "head_sha": "01f11fdd42b76ef564a7f550c247a3dfce81330e",
+    "file": "src/pybroker/model.py",
+    "function": "merge_lag_series_cache",
+    "native_test_cmd": "python3 -m pytest tests/test_model_lags.py::TestLagData -q",
+    "bench_cmd": "python3 osspr-intake/harness/bench_merge_lag_series_cache.py",
+    "baseline_median_ms": 654.9956,
+    "baseline_noise_pct": 6.6567,
+    "tests_pass_on_baseline": true,
+    "workload": "250 symbols by 1000 business days of OHLCV in one shuffled flat frame, lags=8, columns open/high/low/close/volume.",
+    "notes": "The loop calls symbol_history_arrays once per symbol. Each call masks the whole 250k-row frame and fancy-indexes every lag column, which is about 96% of this benchmark (cProfile tottime sits in symbol_history_arrays). Cost grows with symbols times rows. Group the symbol column once with one argsort, slice each symbol's rows, and argsort dates inside the slice before merge_lag_series_cache_from_arrays. That build returned bit-identical lag arrays and was about 5x faster on this frame. Leave the single-symbol behavior of symbol_history_arrays unchanged. Noise is (max-min)/median over 5 runs after warmup."
+  },
+  {
+    "upstream_repo": "edtechre/pybroker",
+    "head_sha": "01f11fdd42b76ef564a7f550c247a3dfce81330e",
+    "file": "src/pybroker/eval.py",
+    "function": "bootstrap_eval_all",
+    "native_test_cmd": "python3 -m pytest tests/test_eval.py::TestEvaluateMixin -q",
+    "bench_cmd": "python3 osspr-intake/harness/bench_bootstrap_eval_all.py",
+    "baseline_median_ms": 1392.2747,
+    "baseline_noise_pct": 3.0738,
+    "tests_pass_on_baseline": true,
+    "workload": "7800 one-minute bar changes (20 sessions of 390 minutes), 10000 bootstrap samples (StrategyConfig default), bars_per_year=98280, seed 42 reapplied inside each run.",
+    "notes": "EvaluateMixin.evaluate computes profit-factor, Sharpe, and drawdown intervals through this combined kernel. Each replicate still draws one index at a time in _fill_bootstrap_row and then scans the row four times. Batch the random draws and unroll the reductions the way _bca_boot_conf_sharpe was rewritten, keeping the original sum order so seeded intervals stay identical. Do not edit _bca_boot_conf_sharpe; a merged dexhunter PR already changed that function. Noise is (max-min)/median over 5 runs after JIT warmup."
+  },
+  {
+    "upstream_repo": "edtechre/pybroker",
+    "head_sha": "01f11fdd42b76ef564a7f550c247a3dfce81330e",
+    "file": "src/pybroker/scope.py",
+    "function": "fetch",
+    "native_test_cmd": "python3 -m pytest tests/test_scope.py::TestIndicatorScope -q",
+    "bench_cmd": "python3 osspr-intake/harness/bench_indicator_scope_fetch.py",
+    "baseline_median_ms": 591.3449,
+    "baseline_noise_pct": 8.3857,
+    "tests_pass_on_baseline": true,
+    "workload": "Cold IndicatorScope.fetch of indicator 'sma' for 48 symbols. Each series has 160000 one-minute bars; filter_dates is every 4th bar and is sorted, as a walkforward window is. The scope is constructed inside the timed call so every symbol takes the cold mask path.",
+    "notes": "This is IndicatorScope.fetch, not ColumnScope.fetch or ModelInputScope.fetch. The cold base-timeframe Series path builds a boolean mask with np.isin(ind_dates, filter_dates) and copies the matches. cProfile of this benchmark puts np.isin at 0.529s of 0.625s (about 85%), almost all of it re-hashing and sorting both date arrays, including the same filter_dates, on every symbol. A searchsorted equality mask against sorted filter dates matched np.isin and was about 4x faster on the mask alone (80k timestamps). Keep np.isin for an unsorted index so duplicate and unsorted dates stay identical. Hits after the first fetch only slice the cached array and are not the hotspot. Noise is (max-min)/median over 5 runs after warmup."
+  },
+  {
+    "upstream_repo": "edtechre/pybroker",
+    "head_sha": "01f11fdd42b76ef564a7f550c247a3dfce81330e",
+    "file": "src/pybroker/common.py",
+    "function": "_dataframe_records",
+    "native_test_cmd": "python3 -m pytest tests/test_common.py::test_dataframe_records_drops_unnamed_index tests/test_common.py::test_dataframe_records_keeps_named_index tests/test_common.py::test_dataframe_records_when_negative_max_rows_then_error tests/test_common.py::test_json_safe_total tests/test_common.py::test_json_safe_when_nat_then_null tests/test_common.py::test_json_safe_non_finite_decimal tests/test_common.py::test_json_safe_fallback_deterministic -q",
+    "metric_kind": "peak_memory_bytes",
+    "baseline_value": 80929649,
+    "baseline_noise_pct": 0.0006,
+    "metric_benchmark": "python3 osspr-intake/harness/peak_dataframe_records.py",
+    "tests_pass_on_baseline": true,
+    "labeled_data": null,
+    "workload": "60000-row portfolio frame shaped like Strategy._to_test_result after quantize: a named minute DatetimeIndex plus float64 cash, equity, margin, margin_loan, net_cash_balance, market_value, pnl, unrealized_pnl, and fees, and a symbol column. pnl holds one NaN, one +inf, and one -inf. Called with max_rows=None.",
+    "notes": "to_dict(orient='records') builds a dict for every row, then the list comprehension runs _json_safe, which builds a second dict per row before the first list can be freed. Traced peak on this frame is 80929649 bytes. Walking rows with itertuples and _json_safe one record at a time returned an equal list and peaked at 46677504 bytes. A column-wise pass (float NaN to null, infinities to the Infinity sentinels, datetime64 to isoformat, strings unchanged) can do the same without the generic isinstance walk. The returned list of dicts has to stay equal, including the named date index being materialized. Noise is (max-min)/median of 5 tracemalloc peaks."
+  }
+]
